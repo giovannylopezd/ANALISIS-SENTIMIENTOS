@@ -1,0 +1,252 @@
+---
+title: "Análisis de Sentimientos"
+author: "Giovanny Lopez"
+date: "17/8/2020"
+output: 
+  html_document: 
+    theme: journal
+    highlight: tango
+    toc: yes
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(cache = FALSE, warning = FALSE,
+                      message = FALSE, echo = TRUE, dpi = 180,
+                      fig.width = 8, fig.height = 5)
+```
+
+Comencemos cargando los paquetes iniciales
+```{r}
+library("dplyr")
+library("tm.plugin.webmining")
+library("purrr")
+library("tidytext")
+library("gutenbergr")
+library("ggplot2")
+```
+
+
+## La Odisea
+En esta ocasión estaremos usando el paquete *gutenbergr* que nos permite descargar los libros del Proyecto Gutenberg.
+Para obtener el **ID** del libro podemos ingresar a la página del [Proyecto Gutenberg](https://www.gutenberg.org/ebooks/57303) desarrollado por [David Robinson](http://varianceexplained.org/)
+
+### Exploración
+```{r}
+gutenberg_metadata %>% filter(title == "The Odyssey")
+```
+
+### Obtención de datos
+```{r}
+odisea <- gutenberg_download(3160)
+odisea  # Echemos un vistazo al contenido
+```
+
+### Limpieza de Datos
+Debido a que la extracción de estos libros no presenta mayores problemas en cuestión de estructura para nuestro propósito, simplemente separamos las líneas de texto en palabras y luego quitamos las **palabras vacías** o stop words
+```{r}
+odisea_ordenada <- odisea %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words)
+odisea_ordenada
+```
+
+Ahora que tenemos un formato de datos que nos puede servir, podemos hacer algunas visualizaciones.
+
+## Visualización Método Bing
+Con este método obtenemos ponderaciones sobre sentimientos negativos y positivos en cada palabra
+```{r}
+library(wordcloud)
+library(reshape2)
+odisea_ordenada %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>% as.data.frame() %>% 
+    rename(Negativas = negative, Positivas = positive) %>%
+  comparison.cloud(colors = c("#F8766D", "#00BFC4"),
+                   max.words = 100)
+```
+
+## Visualización Método NRC {.tabset .tabset-fade .tabset-pills}
+El método **NRC** clasifica las palabras en 10 sentimientos no excluyentes entre sí, por lo que una misma palabra puede tener varios sentimientos. Los sentimientos que utiliza son:
+
+1. Positivo
+2. Negativo
+3. Miedo
+4. Anticipación
+5. Asco
+6. Alegría
+7. Tristeza
+8. Sorpresa
+9. Enfado
+10. Confianza
+
+### Sentimientos Positivo/Negativo
+```{r}
+set.seed(20)
+odisea_nrc <- odisea_ordenada %>%
+  inner_join(get_sentiments("nrc")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  as.data.frame() %>% 
+  rename(Negativo = negative, Positivo = positive,
+         Miedo = fear, Anticipación = anticipation,
+         Asco = disgust, Alegría = joy,
+         Tristeza = sadness, Sorpresa = surprise,
+         Enfado = anger, Confianza = trust)
+
+odisea_nrc %>% select(Positivo,Negativo) %>%
+  comparison.cloud(colors = c("#97E4F5", "#FF3B3F"),  
+                   max.words = 100, title.bg.colors="#FFFFFF", title.colors= "#858585")
+```
+
+### Sentimientos Alegría/Tristeza/Asco/Anticipación
+```{r}
+# Para esta nube usaremos las paletas Brewer
+library(RColorBrewer)
+# Separamos los datos para mostrar 4 sentimientos
+nrc_4 <- odisea_nrc %>%
+  select(Alegría, Tristeza, Asco, Anticipación)
+# Creamos una variable filtradora que ayude a omitir palabras sin puntuación en los sentimientos elegidos
+filtrador_na <- nrc_4 %>%
+  mutate(suma = Alegría + Tristeza + Asco + Anticipación) %>% select(suma)
+# Agregamos la columna del filtrador
+nrc_4$suma <- filtrador_na$suma
+# Filtramos y creamos la nube de palabras
+nrc_4 %>%
+  filter(suma != 0) %>%
+  select(Asco, Tristeza, Alegría, Anticipación) %>% 
+  comparison.cloud(colors = brewer.pal(4,"RdYlBu"), scale=c(4,1), rot.per=0.05,
+                   max.words = 200, title.bg.colors="#F1F1F1", title.colors= "#858585", title.size = 3)
+```
+
+### Sentimientos Enfado/Miedo/Sorpresa/Confianza
+```{r}
+# En esta visualización podemos usar la paleta viridis
+library(viridis)
+# Separamos los datos para mostrar 4 sentimientos
+nrc_8 <- odisea_nrc %>%
+  select(Enfado, Miedo, Sorpresa, Confianza)
+# Creamos una variable filtradora que ayude a omitir palabras sin puntuación en los sentimientos elegidos
+filtrador_na <- nrc_8 %>%
+  mutate(suma = Enfado + Miedo + Sorpresa + Confianza) %>% select(suma)
+# Agregamos la columna del filtrador
+nrc_8$suma <- filtrador_na$suma
+# Filtramos y creamos la nube de palabras
+nrc_8 %>%
+  filter(suma != 0) %>%
+  select(Enfado, Miedo, Sorpresa, Confianza) %>% 
+  comparison.cloud(colors = viridis(4, option = "D"), scale=c(4,1),
+                   max.words = 200, title.bg.colors="#F1F1F1", title.colors= "#858585", title.size = 3, rot.per=0.1)
+```
+
+## Visualización Método AFINN {.tabset .tabset-fade .tabset-pills}
+Este método clasifica a cada palabra en valores dentro de un rango de -5 y 5
+
+### Tendencia de Sentimientos
+```{r}
+# Obtenemos los resultados por palabras
+odisea_afinn <- odisea_ordenada %>%
+  inner_join(get_sentiments("afinn"))
+# Graficamos la tendencia de los valores obtenidos con el método de suavizado GAM
+data.frame(Palabras = 1:length(odisea_afinn$value), 
+       Sentimiento = scales::rescale(odisea_afinn$value,to = c(-1, 1))) %>% # Se escalan los valores entre -1 y 1 sin afectar la forma
+  ggplot(aes(Palabras, Sentimiento)) +
+    geom_smooth(method = "gam", # Usamos este método para observaciones >= 1000, "loess" observaciones < 1000
+                se = TRUE,
+                color = "#00BFC4",
+                fill = "#00BFC4",
+                size = 2)  +
+    theme(plot.title = element_text(family = "Arial", face = "bold", size = (18))) +
+    ggtitle("Tendencia Suavizada")
+```
+
+El paquete **Syuzhet** tiene una función que nos podría ayudar a visualizar de mejor manera la escala de sentimientos con 3 métodos de suavizado de tendencia
+```{r,fig2, fig.height = 10, fig.width = 7, fig.align = "center"}
+library(syuzhet)
+simple_plot(odisea_afinn$value)
+```
+
+### Distribución Escalada de Sentimientos
+La gráfica de cajas nos indica que dentro de estos valores escalados de sentimientos la mediana de los datos tiene un valor positivo cercano a **0.3**, por lo que, con este método de obtención de sentimientos, los valores de sentimientos en este libro son en general ligeramente más positivos que negativos
+```{r}
+boxplot(scales::rescale(odisea_afinn$value,to = c(-1, 1)))
+```
+
+
+## Bigramas {.tabset .tabset-fade .tabset-pills}
+
+### Creación de Bigramas
+Podemos crear multigramas, en este caso bigramas, según la conveniencia del proyecto.
+De esta manera se pueden analizar diferentes tipos de relaciones entre palabras.
+```{r}
+odisea_bigramas <- odisea %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2) %>% rename(bigrama = bigram)
+odisea_bigramas
+```
+
+
+### Separación, Limpieza y Conteo
+Aquí separamos los bigramas, filtramos cualquier palabra vacía y hacemos el conteo de los bigramas existentes.
+```{r}
+library(tidyr)
+# Separación de bigramas
+bigramas_separados <- odisea_bigramas %>%
+  separate(bigrama, c("palabra1", "palabra2"), sep = " ")
+# Limpiamos filtrando de palabras vacías
+bigramas_filtrados <- bigramas_separados %>%
+  filter(!palabra1 %in% stop_words$word) %>%
+  filter(!palabra2 %in% stop_words$word)
+# Conteo de bigramas
+conteo_bigramas <- bigramas_filtrados %>% 
+  count(palabra1, palabra2, sort = TRUE)
+conteo_bigramas
+```
+
+### Unión de Bigramas Limpios
+```{r}
+bigramas_unidos <- bigramas_filtrados %>%
+  unite(bigrama, palabra1, palabra2, sep = " ")
+bigramas_unidos
+```
+
+## Graficando Bigramas {.tabset .tabset-fade .tabset-pills}
+
+### Gráfica relacional
+Este es un mapeo de las relaciones entre bigramas, el código permite visualizar qué bigramas tienen mayor o menor peso según la opacidad de las flechas
+```{r}
+library(igraph)
+library(ggraph)
+set.seed(20)
+# Personalizamos la flecha de relaciones
+flecha <- grid::arrow(type = "closed", length = unit(.09, "inches"))
+# Graficamos las relaciones entre bigramas
+conteo_bigramas %>%
+  filter(n > 6) %>%
+  graph_from_data_frame() %>%
+ggraph(layout="fr") + geom_edge_link(aes(edge_alpha=n), show.legend=FALSE, arrow=flecha, end_cap=circle(.06, "inches")) +
+  geom_node_point(color="#00BFC4", size=4) + geom_node_text(aes(label=name),repel = TRUE, vjust=1, hjust=1) + ggtitle("Bigramas Comunes en La Odisea") +
+  theme_void()
+```
+
+### Bigramas Comunes
+Gráfica de bigramas con más de 10 apariciones
+```{r}
+bigramas_unidos %>%
+  count(bigrama,sort = T) %>% filter(n>10) %>% 
+  ggplot(aes(reorder(bigrama, n),n,fill = reorder(bigrama,-n))) +
+  geom_bar(stat = 'identity') +
+  ggtitle("Los bigramas más comunes en La Odisea") +
+  coord_flip() +
+  theme(panel.grid.minor = element_blank()) +
+  xlab(element_blank()) +
+  ylab(element_blank()) +
+  scale_fill_viridis(discrete = TRUE, option = "D") +
+  theme(legend.position = "none")
+```
+
+
+
+
+
